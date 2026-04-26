@@ -1,0 +1,43 @@
+[general]
+# Base directory for Videos/ and Audio/ folders.
+# Use "." for the project root, or an absolute path.
+base_dir = "/home/moritz/Media/YTDownloader"
+
+[video]
+# Maximum video resolution (height in pixels). Videos above this are scaled down.
+max_resolution = 1080
+# Output container format for merged video+audio.
+format = "mp4"
+# File naming template (yt-dlp output template syntax).
+file_template = "%(title)s [%(id)s].%(ext)s"
+
+[audio]
+# Audio format for audio-only downloads.
+format = "mp3"
+# Audio bitrate for audio-only downloads (kbps).
+bitrate = "192"
+# File naming template for audio-only downloads.
+file_template = "%(title)s [%(id)s].%(ext)s"
+
+[transcode]
+# Video codec for transcoding.
+codec = "libx264"
+# Constant Rate Factor (quality). Lower = better quality, larger file.
+# 18 = visually lossless, 23 = default, 25 = slight compression, 28 = noticeable.
+crf = 25
+# Audio codec for transcoded files.
+audio_codec = "aac"
+# Preset: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow.
+preset = "medium"
+
+[network]
+# Minimum sleep interval between video downloads (seconds).
+sleep_interval = 10
+# Maximum sleep interval (random between min and max).
+max_sleep_interval = 20
+# Sleep between extraction/API requests (seconds).
+sleep_requests = 0.75
+# Number of retries for failed downloads.
+retries = 10
+# Number of retries for failed fragments.
+fragment_retries = 10
