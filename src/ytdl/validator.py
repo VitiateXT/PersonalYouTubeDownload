@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import parse_qs, urlparse
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -72,9 +73,10 @@ def detect_url_type(url: str) -> URLType:
     Raises:
         ValueError: If the URL type cannot be determined.
     """
-    # Any YouTube URL with a list query parameter should be treated as a
-    # playlist target (e.g. /watch?list=..., /watch?v=...&list=...).
-    if "list=" in url:
+    # Any YouTube URL with a real `list` query parameter should be treated as
+    # a playlist target (e.g. /watch?list=..., /watch?v=...&list=...).
+    query = parse_qs(urlparse(url).query)
+    if "list" in query and query["list"]:
         return URLType.PLAYLIST
 
     for pattern in _CHANNEL_PATTERNS:

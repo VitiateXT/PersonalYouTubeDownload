@@ -81,6 +81,14 @@ class TestDetectUrlType:
             == URLType.PLAYLIST
         )
 
+    def test_list_substring_without_list_query_not_playlist(self):
+        assert (
+            detect_url_type(
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ&note=contains-list%3Dabc"
+            )
+            == URLType.VIDEO
+        )
+
     def test_channel_at_url(self):
         assert (
             detect_url_type("https://www.youtube.com/@ChannelName")

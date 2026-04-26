@@ -85,20 +85,23 @@ def update(
     # Check what's missing
     missing_ids, all_remote_ids = check_for_updates(url, output_dir)
 
+    result: DownloadResult
     if not missing_ids:
         logger.info(f"No new content to download for '{source_name}'.")
-        return DownloadResult(skipped=[f"All {len(all_remote_ids)} videos already downloaded"])
+        result = DownloadResult(
+            skipped=[f"All {len(all_remote_ids)} videos already downloaded"]
+        )
+    else:
+        logger.info(f"Found {len(missing_ids)} new items to download for '{source_name}'.")
 
-    logger.info(f"Found {len(missing_ids)} new items to download for '{source_name}'.")
-
-    # yt-dlp archive handling ensures existing items are skipped safely.
-    downloader = VideoDownloader(config)
-    result = downloader.download_batch(
-        url=url,
-        mode=mode,
-        source_type=source_type,
-        source_name=source_name,
-    )
+        # yt-dlp archive handling ensures existing items are skipped safely.
+        downloader = VideoDownloader(config)
+        result = downloader.download_batch(
+            url=url,
+            mode=mode,
+            source_type=source_type,
+            source_name=source_name,
+        )
 
     # Transcode any pending videos in _raw/ (includes leftovers from an
     # interrupted prior run, even when this run downloaded nothing new).

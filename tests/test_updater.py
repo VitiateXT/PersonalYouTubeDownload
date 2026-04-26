@@ -156,12 +156,13 @@ class TestUpdate:
             mock_transcode.assert_not_called()
 
     @patch("ytdl.updater.save_report")
+    @patch("ytdl.updater.batch_transcode", return_value=(0, 0))
     @patch("ytdl.updater.VideoDownloader")
     @patch("ytdl.updater.extract_metadata")
     def test_update_all_downloaded_returns_skipped(
-        self, mock_extract, mock_dl_class, mock_save, config
+        self, mock_extract, mock_dl_class, mock_transcode, mock_save, config
     ):
-        """When all videos are already downloaded, return early."""
+        """When all videos are already downloaded, return skipped result."""
         mock_extract.return_value = MediaMetadata(
             url_type=URLType.CHANNEL,
             title="Test Channel",
@@ -185,6 +186,9 @@ class TestUpdate:
             config,
         )
 
-        # Should not call download_batch since nothing is missing
+        # Should not call download_batch since nothing is missing.
         mock_dl_class.return_value.download_batch.assert_not_called()
+        # But should still run transcode/report path in video mode.
+        mock_transcode.assert_called_once()
+        mock_save.assert_called_once()
         assert len(result.skipped) > 0
