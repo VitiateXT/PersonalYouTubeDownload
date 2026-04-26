@@ -38,6 +38,7 @@ Thumbs.db
 Videos/
 Audio/
 *.log
+.docs/
 
 # Local environment files
 .env
