@@ -5,6 +5,8 @@ Download YouTube videos or audio from:
 - a playlist URL
 - a channel URL
 
+It can also download University of Oxford podcast series (audio, with optional captions).
+
 Video downloads are capped at 1080p (or lower if source is lower), merged with audio, and then transcoded.
 
 ## What This Does
@@ -73,6 +75,31 @@ cd scripts
 ./download_channel_audio.sh "https://www.youtube.com/@<CHANNEL_HANDLE>"
 ```
 
+### Oxford Podcasts
+
+Pass a series page (or its "Audio RSS Feed" link) from <https://podcasts.ox.ac.uk>:
+
+```bash
+./download_oxford_podcast.sh "https://podcasts.ox.ac.uk/series/strachey-lectures"
+# or, equivalently:
+ytdl download --url "https://podcasts.ox.ac.uk/series/strachey-lectures"
+```
+
+- Podcasts are audio-only; `--mode` and `--type` are ignored for Oxford URLs.
+- Episodes are saved as `Audio/<Series>/YYYY-MM-DD <Title>.mp3`.
+- Rerunning (`download` or `update`) only fetches episodes not yet in `archive.txt`.
+- Most series offer `.srt` captions, handy for shadowing practice (listen, read, and
+  repeat along). They are off by default; enable them in `config.toml`:
+
+```toml
+[oxford]
+captions = true   # saves "<episode>.srt" next to each mp3
+delay = 1.5       # seconds between downloads
+```
+
+Oxford states that the content is free to download and listen to; check their copyright
+page before using it for anything beyond personal listening.
+
 ## Important URL Rules
 
 If your URL contains `&`, quote it or escape it.
@@ -97,6 +124,7 @@ You can also use the CLI directly:
 ytdl download --url "https://www.youtube.com/watch?v=<VIDEO_ID>" --mode video
 ytdl download --url "https://www.youtube.com/playlist?list=<PLAYLIST_ID>" --mode audio
 ytdl update --url "https://www.youtube.com/@<CHANNEL_HANDLE>" --mode video
+ytdl download --url "https://podcasts.ox.ac.uk/series/<SERIES_NAME>"
 ytdl transcode --dir "Videos/Misc"
 ```
 

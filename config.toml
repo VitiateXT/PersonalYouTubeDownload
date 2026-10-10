@@ -41,3 +41,9 @@ sleep_requests = 0.75
 retries = 10
 # Number of retries for failed fragments.
 fragment_retries = 10
+
+[oxford]
+# Also download .srt captions next to each Oxford podcast episode (useful for shadowing).
+captions = false
+# Seconds to pause between episode downloads (be kind to their server).
+delay = 1.5

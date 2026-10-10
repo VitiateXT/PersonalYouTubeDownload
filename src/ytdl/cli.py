@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ytdl.config import Config, load_config
 from ytdl.downloader import DownloadMode, VideoDownloader
+from ytdl.oxford import download_series, is_oxford_url
 from ytdl.tracker import format_report, generate_report, save_report
 from ytdl.transcoder import batch_transcode
 from ytdl.updater import update
@@ -32,6 +33,36 @@ def setup_logging(verbose: bool = False) -> None:
     )
 
 
+def _run_oxford(url: str, config: Config) -> int:
+    """Download new episodes of an Oxford Podcasts series.
+
+    Podcasts are audio-only, so --mode and --type do not apply. Downloads are
+    archive-incremental, which makes `download` and `update` equivalent.
+
+    Args:
+        url: Oxford Podcasts series page or feed URL.
+        config: Resolved application configuration.
+
+    Returns:
+        Process exit code.
+    """
+    logger.info(f"Downloading Oxford podcast (audio only): {url}")
+
+    try:
+        series, output_dir, result = download_series(url, config)
+    except ValueError as e:
+        logger.error(str(e))
+        return 1
+    except KeyboardInterrupt:
+        return 1
+
+    report = generate_report(result, series, url)
+    print(format_report(report))
+    save_report(report, output_dir)
+
+    return 1 if result.failed else 0
+
+
 def cmd_download(args: argparse.Namespace, config: Config) -> int:
     """Handle the `download` subcommand.
 
@@ -44,6 +75,9 @@ def cmd_download(args: argparse.Namespace, config: Config) -> int:
     """
     url = args.url
     mode = DownloadMode(args.mode)
+
+    if is_oxford_url(url):
+        return _run_oxford(url, config)
 
     if not validate_url(url):
         logger.error(f"Invalid YouTube URL: {url}")
@@ -130,6 +164,9 @@ def cmd_update(args: argparse.Namespace, config: Config) -> int:
     url = args.url
     mode = DownloadMode(args.mode)
 
+    if is_oxford_url(url):
+        return _run_oxford(url, config)
+
     if not validate_url(url):
         logger.error(f"Invalid YouTube URL: {url}")
         return 1
@@ -211,7 +248,7 @@ def build_parser() -> argparse.ArgumentParser:
     dl_parser.add_argument(
         "--url", "-u",
         required=True,
-        help="YouTube URL (video, playlist, or channel)",
+        help="YouTube URL (video, playlist, or channel) or Oxford Podcasts series URL",
     )
     dl_parser.add_argument(
         "--mode", "-m",
@@ -233,7 +270,7 @@ def build_parser() -> argparse.ArgumentParser:
     up_parser.add_argument(
         "--url", "-u",
         required=True,
-        help="YouTube channel or playlist URL",
+        help="YouTube channel or playlist URL, or Oxford Podcasts series URL",
     )
     up_parser.add_argument(
         "--mode", "-m",

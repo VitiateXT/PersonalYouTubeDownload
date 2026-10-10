@@ -34,6 +34,10 @@ DEFAULTS = {
         "retries": 10,
         "fragment_retries": 10,
     },
+    "oxford": {
+        "captions": False,
+        "delay": 1.5,
+    },
 }
 
 
@@ -58,6 +62,8 @@ class Config:
         sleep_requests: Sleep between extractor/API requests.
         retries: Retry count for main download requests.
         fragment_retries: Retry count for media fragment requests.
+        oxford_captions: Also download .srt captions for Oxford podcast episodes.
+        oxford_delay: Seconds to pause between Oxford podcast downloads.
     """
 
     # General
@@ -85,6 +91,10 @@ class Config:
     sleep_requests: float = 0.75
     retries: int = 10
     fragment_retries: int = 10
+
+    # Oxford podcasts
+    oxford_captions: bool = False
+    oxford_delay: float = 1.5
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -157,6 +167,7 @@ def load_config(path: str | Path | None = None) -> Config:
     audio = merged["audio"]
     transcode = merged["transcode"]
     network = merged["network"]
+    oxford = merged["oxford"]
 
     base_dir = Path(general["base_dir"])
     # Resolve relative paths against config file location or CWD
@@ -183,4 +194,6 @@ def load_config(path: str | Path | None = None) -> Config:
         sleep_requests=float(network["sleep_requests"]),
         retries=int(network["retries"]),
         fragment_retries=int(network["fragment_retries"]),
+        oxford_captions=bool(oxford["captions"]),
+        oxford_delay=float(oxford["delay"]),
     )

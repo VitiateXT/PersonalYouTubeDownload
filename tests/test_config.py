@@ -38,6 +38,8 @@ class TestLoadConfig:
         assert config.audio_bitrate == "192"
         assert config.transcode_crf == 25
         assert config.sleep_interval == 10
+        assert config.oxford_captions is False
+        assert config.oxford_delay == 1.5
 
     def test_load_from_file(self, tmp_path):
         """Loading config from a valid TOML file."""
@@ -78,3 +80,12 @@ class TestConfigDataclass:
         assert config.base_dir == tmp_path
         assert config.max_resolution == 720
         assert config.transcode_crf == 20
+
+
+class TestOxfordConfig:
+    def test_oxford_section_overrides_defaults(self, tmp_path):
+        cfg_file = tmp_path / "config.toml"
+        cfg_file.write_text("[oxford]\ncaptions = true\ndelay = 0.5\n")
+        config = load_config(cfg_file)
+        assert config.oxford_captions is True
+        assert config.oxford_delay == 0.5
