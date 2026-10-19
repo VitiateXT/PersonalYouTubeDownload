@@ -111,10 +111,12 @@ def extract_metadata(url: str) -> MediaMetadata:
     """
     url_type = detect_url_type(url)
 
+    # "in_playlist" (not True) so yt-dlp still follows a top-level redirect,
+    # e.g. watch?list=X -> playlist?list=X, while keeping the entries flat.
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        "extract_flat": True if url_type != URLType.VIDEO else False,
+        "extract_flat": "in_playlist" if url_type != URLType.VIDEO else False,
         "skip_download": True,
     }
 
@@ -137,8 +139,12 @@ def extract_metadata(url: str) -> MediaMetadata:
             video_titles=[info.get("title", "Unknown")],
         )
 
+    # An unresolved redirect has no title or entries; never guess a folder name.
+    if info.get("_type") == "url":
+        raise ValueError(f"Could not resolve {url_type.value} (yt-dlp returned a redirect only): {url}")
+
     # Playlist or channel — entries are flat-extracted
-    entries = list(info.get("entries", []))
+    entries = list(info.get("entries") or [])
     video_ids = []
     video_titles = []
     for entry in entries:
@@ -146,8 +152,12 @@ def extract_metadata(url: str) -> MediaMetadata:
             video_ids.append(entry.get("id", ""))
             video_titles.append(entry.get("title", "Unknown"))
 
-    title = info.get("title") or info.get("uploader") or "Unknown"
     source_id = info.get("id") or info.get("channel_id") or ""
+    # Fall back to the ID rather than a shared name, so different sources
+    # never end up in the same folder.
+    title = info.get("title") or info.get("uploader") or source_id
+    if not title:
+        raise ValueError(f"Could not determine the {url_type.value} name for {url}")
 
     return MediaMetadata(
         url_type=url_type,

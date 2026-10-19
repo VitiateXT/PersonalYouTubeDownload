@@ -183,6 +183,62 @@ class TestExtractMetadata:
             extract_metadata("https://www.youtube.com/watch?v=invalid")
 
     @patch("ytdl.validator.YoutubeDL")
+    def test_playlist_follows_top_level_redirect(self, mock_ydl_class, sample_playlist_info):
+        """watch?list=X is a redirect to playlist?list=X; it must be followed."""
+        mock_instance = MagicMock()
+        mock_instance.extract_info.return_value = sample_playlist_info
+        mock_instance.__enter__ = MagicMock(return_value=mock_instance)
+        mock_instance.__exit__ = MagicMock(return_value=False)
+        mock_ydl_class.return_value = mock_instance
+
+        result = extract_metadata("https://www.youtube.com/watch?list=PLtest123")
+
+        assert mock_ydl_class.call_args.args[0]["extract_flat"] == "in_playlist"
+        assert result.title == "Test Playlist"
+
+    @patch("ytdl.validator.YoutubeDL")
+    def test_unresolved_redirect_raises(self, mock_ydl_class):
+        mock_instance = MagicMock()
+        mock_instance.extract_info.return_value = {
+            "_type": "url",
+            "url": "https://www.youtube.com/playlist?list=PLtest123",
+            "id": "PLtest123",
+        }
+        mock_instance.__enter__ = MagicMock(return_value=mock_instance)
+        mock_instance.__exit__ = MagicMock(return_value=False)
+        mock_ydl_class.return_value = mock_instance
+
+        with pytest.raises(ValueError, match="redirect"):
+            extract_metadata("https://www.youtube.com/watch?list=PLtest123")
+
+    @patch("ytdl.validator.YoutubeDL")
+    def test_missing_title_falls_back_to_id(self, mock_ydl_class):
+        mock_instance = MagicMock()
+        mock_instance.extract_info.return_value = {
+            "_type": "playlist",
+            "id": "PLtest123",
+            "entries": [{"id": "video1", "title": "V1"}],
+        }
+        mock_instance.__enter__ = MagicMock(return_value=mock_instance)
+        mock_instance.__exit__ = MagicMock(return_value=False)
+        mock_ydl_class.return_value = mock_instance
+
+        result = extract_metadata("https://www.youtube.com/playlist?list=PLtest123")
+
+        assert result.title == "PLtest123"
+
+    @patch("ytdl.validator.YoutubeDL")
+    def test_missing_title_and_id_raises(self, mock_ydl_class):
+        mock_instance = MagicMock()
+        mock_instance.extract_info.return_value = {"_type": "playlist", "entries": []}
+        mock_instance.__enter__ = MagicMock(return_value=mock_instance)
+        mock_instance.__exit__ = MagicMock(return_value=False)
+        mock_ydl_class.return_value = mock_instance
+
+        with pytest.raises(ValueError, match="Could not determine"):
+            extract_metadata("https://www.youtube.com/playlist?list=PLtest123")
+
+    @patch("ytdl.validator.YoutubeDL")
     def test_extract_metadata_none_result(self, mock_ydl_class):
         mock_instance = MagicMock()
         mock_instance.extract_info.return_value = None
