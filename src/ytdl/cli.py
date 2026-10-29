@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from datetime import date
 from pathlib import Path
 
 from ytdl.config import Config, load_config
 from ytdl.downloader import DownloadMode, VideoDownloader
 from ytdl.oxford import download_series, is_oxford_url
+from ytdl.repair import inspect_folder, repair_after_download, repair_before_download
 from ytdl.tracker import format_report, generate_report, save_report
 from ytdl.transcoder import batch_transcode
 from ytdl.updater import update
@@ -31,6 +33,26 @@ def setup_logging(verbose: bool = False) -> None:
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+def add_file_logging(base_dir: Path) -> None:
+    """Also append log messages to `{base_dir}/logs/ytdl-YYYY-MM-DD.log`.
+
+    The terminal output is lost once the window is closed; the log file keeps
+    the actual yt-dlp/ffmpeg errors behind failed downloads.
+
+    Args:
+        base_dir: Configured base directory.
+    """
+    log_dir = base_dir / "logs"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(log_dir / f"ytdl-{date.today().isoformat()}.log", encoding="utf-8")
+    except OSError as e:
+        logger.warning(f"Could not open a log file in {log_dir}: {e}")
+        return
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logging.getLogger().addHandler(handler)
 
 
 def _run_oxford(url: str, config: Config) -> int:
@@ -126,6 +148,17 @@ def cmd_download(args: argparse.Namespace, config: Config) -> int:
 
     logger.info(f"Source: {source_name} ({metadata.video_count} videos)")
 
+    content_type = ContentType.VIDEO if mode == DownloadMode.VIDEO else ContentType.AUDIO
+    output_dir = get_output_dir(config.base_dir, content_type, source_type, source_name)
+
+    # Queue broken files from earlier runs for re-download before yt-dlp
+    # consults the archive.
+    try:
+        repair_before_download(output_dir, mode, config)
+    except ValueError as e:
+        logger.error(str(e))
+        return 1
+
     # Execute download through yt-dlp wrapper.
     downloader = VideoDownloader(config)
     if source_type == SourceType.SINGLE:
@@ -134,13 +167,12 @@ def cmd_download(args: argparse.Namespace, config: Config) -> int:
         result = downloader.download_batch(url, mode, source_type, source_name)
 
     # Video mode always runs a batch transcode pass after download.
-    content_type = ContentType.VIDEO if mode == DownloadMode.VIDEO else ContentType.AUDIO
-    output_dir = get_output_dir(config.base_dir, content_type, source_type, source_name)
-
     if mode == DownloadMode.VIDEO:
         logger.info("Starting batch transcode...")
         t_ok, t_fail = batch_transcode(output_dir, config)
         logger.info(f"Transcode complete: {t_ok} succeeded, {t_fail} failed")
+
+    repair_after_download(output_dir, mode, config)
 
     # Always print and persist a report for user visibility.
     report = generate_report(result, source_name, url)
@@ -219,6 +251,53 @@ def cmd_transcode(args: argparse.Namespace, config: Config) -> int:
     return 1 if t_fail > 0 else 0
 
 
+def _guess_mode(folder: Path) -> DownloadMode:
+    """Guess a folder's mode from its location (`.../Audio/<name>` is audio)."""
+    return DownloadMode.AUDIO if folder.parent.name == ContentType.AUDIO.value else DownloadMode.VIDEO
+
+
+def cmd_check(args: argparse.Namespace, config: Config) -> int:
+    """Handle the `check` subcommand: report what the next run would repair.
+
+    Read-only: nothing is moved, deleted or written.
+
+    Args:
+        args: Parsed CLI arguments.
+        config: Resolved application configuration.
+
+    Returns:
+        0 if nothing needs repair, 1 otherwise.
+    """
+    if args.dir:
+        target = Path(args.dir).expanduser().resolve()
+        if not target.is_dir():
+            logger.error(f"Directory not found: {target}")
+            return 1
+        mode = DownloadMode(args.mode) if args.mode else _guess_mode(target)
+        folders = [(target, mode)]
+    else:
+        folders = []
+        for content_type, mode in ((ContentType.VIDEO, DownloadMode.VIDEO),
+                                   (ContentType.AUDIO, DownloadMode.AUDIO)):
+            root = config.base_dir / content_type.value
+            if root.is_dir():
+                folders += [(d, mode) for d in sorted(root.iterdir()) if d.is_dir()]
+
+    needs_repair = 0
+    for folder, mode in folders:
+        report = inspect_folder(folder, mode, config)
+        if report.needs_action or report.error or report.warnings or report.unchecked:
+            print(report.format())
+            print()
+        if report.needs_action or report.error:
+            needs_repair += 1
+
+    print(f"Checked {len(folders)} folder(s): {needs_repair} need repair.")
+    if needs_repair:
+        print("Re-run the download/update for those channels or playlists to repair them.")
+    return 1 if needs_repair else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level CLI parser.
 
@@ -289,6 +368,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory containing files to transcode (must have _raw/ subdirectory)",
     )
 
+    # check subcommand
+    ck_parser = subparsers.add_parser(
+        "check", help="Report broken files the next download/update would repair (read-only)"
+    )
+    ck_parser.add_argument(
+        "--dir", "-d",
+        help="Channel/playlist folder to check (default: every folder under Videos/ and Audio/)",
+    )
+    ck_parser.add_argument(
+        "--mode", "-m",
+        choices=["video", "audio"],
+        default=None,
+        help="Folder type (default: audio for folders under Audio/, else video)",
+    )
+
     return parser
 
 
@@ -313,10 +407,15 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
     logger.debug(f"Config loaded: base_dir={config.base_dir}")
 
+    # `check` stays read-only, so it does not create a log file.
+    if args.command != "check":
+        add_file_logging(config.base_dir)
+
     commands = {
         "download": cmd_download,
         "update": cmd_update,
         "transcode": cmd_transcode,
+        "check": cmd_check,
     }
 
     handler = commands.get(args.command)

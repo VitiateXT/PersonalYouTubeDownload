@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ytdl.config import Config
 from ytdl.downloader import DownloadMode, DownloadResult, VideoDownloader
+from ytdl.repair import repair_after_download, repair_before_download
 from ytdl.tracker import (
     format_report,
     generate_report,
@@ -58,8 +59,9 @@ def update(
 ) -> DownloadResult:
     """Incrementally update a channel or playlist directory.
 
-    Downloads only videos that are not already in the local archive.
-    Never deletes existing files, even if they've been removed from YouTube.
+    Downloads only videos that are not already in the local archive. Broken
+    files from earlier runs are re-queued first and replaced. Never deletes
+    working files, even if they've been removed from YouTube.
 
     Args:
         url: YouTube channel or playlist URL.
@@ -68,6 +70,9 @@ def update(
 
     Returns:
         DownloadResult for the update operation.
+
+    Raises:
+        ValueError: For non-channel/playlist URLs or a folder that is unsafe to repair.
     """
     metadata = extract_metadata(url)
     source_name = metadata.title
@@ -81,6 +86,9 @@ def update(
 
     content_type = ContentType.VIDEO if mode == DownloadMode.VIDEO else ContentType.AUDIO
     output_dir = get_output_dir(config.base_dir, content_type, source_type, source_name)
+
+    # Re-queue broken files first, so they count as missing below.
+    repair_before_download(output_dir, mode, config)
 
     # Check what's missing
     missing_ids, all_remote_ids = check_for_updates(url, output_dir)
@@ -109,6 +117,8 @@ def update(
         logger.info("Transcoding pending videos...")
         t_ok, t_fail = batch_transcode(output_dir, config)
         logger.info(f"Transcode: {t_ok} succeeded, {t_fail} failed")
+
+    repair_after_download(output_dir, mode, config)
 
     # Generate and save report
     report = generate_report(result, source_name, url)

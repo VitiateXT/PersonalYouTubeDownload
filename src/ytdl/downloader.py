@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -19,6 +20,9 @@ from ytdl.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# yt-dlp prefixes per-video messages with e.g. "[youtube] dQw4w9WgXcQ: ...".
+_MESSAGE_VIDEO_ID = re.compile(r"\[youtube\] ([A-Za-z0-9_-]{11}):")
 
 
 class DownloadMode(Enum):
@@ -51,12 +55,20 @@ class DownloadResult:
 
 
 class _YDLLogger:
-    """Custom logger for yt-dlp that captures messages."""
+    """Custom logger for yt-dlp that captures messages and errors per video."""
 
     def __init__(self) -> None:
         """Initialize in-memory warning/error capture buffers."""
         self.errors: list[str] = []
         self.warnings: list[str] = []
+        self.current_id: str | None = None
+        self.errors_by_id: dict[str, str] = {}
+
+    def _track(self, msg: str) -> None:
+        """Remember which video yt-dlp is working on, from its message prefix."""
+        match = _MESSAGE_VIDEO_ID.search(msg)
+        if match:
+            self.current_id = match.group(1)
 
     def debug(self, msg: str) -> None:
         """Handle yt-dlp debug messages.
@@ -64,6 +76,7 @@ class _YDLLogger:
         Args:
             msg: Message emitted by yt-dlp.
         """
+        self._track(msg)
         if msg.startswith("[debug]"):
             logger.debug(msg)
         else:
@@ -75,6 +88,7 @@ class _YDLLogger:
         Args:
             msg: Message emitted by yt-dlp.
         """
+        self._track(msg)
         logger.info(msg)
 
     def warning(self, msg: str) -> None:
@@ -92,8 +106,37 @@ class _YDLLogger:
         Args:
             msg: Message emitted by yt-dlp.
         """
+        self._track(msg)
         self.errors.append(msg)
+        if self.current_id:
+            self.errors_by_id[self.current_id] = msg
         logger.error(msg)
+
+
+def _read_archive(archive_path: Path) -> set[str]:
+    """Return the lines of a yt-dlp archive file (e.g. "youtube dQw4w9WgXcQ")."""
+    if not archive_path.exists():
+        return set()
+    return {line.strip() for line in archive_path.read_text().splitlines() if line.strip()}
+
+
+def _iter_videos(info: dict):
+    """Yield the video entries of a result, flattening nested playlists (channel tabs).
+
+    Args:
+        info: yt-dlp result for a video, playlist or channel.
+
+    Yields:
+        Video info dicts, or None for entries yt-dlp could not extract.
+    """
+    if "entries" not in info:
+        yield info
+        return
+    for entry in info.get("entries") or []:
+        if entry is not None and "entries" in entry:
+            yield from _iter_videos(entry)
+        else:
+            yield entry
 
 
 class VideoDownloader:
@@ -196,11 +239,7 @@ class VideoDownloader:
         archive_path = get_archive_path(out_dir)
 
         # Load existing archive to detect skipped items
-        existing_archive = set()
-        if archive_path.exists():
-            existing_archive = {
-                line.strip() for line in archive_path.read_text().splitlines() if line.strip()
-            }
+        existing_archive = _read_archive(archive_path)
 
         ydl_logger = _YDLLogger()
 
@@ -221,6 +260,9 @@ class VideoDownloader:
             Args:
                 d: Hook event dictionary from yt-dlp.
             """
+            video_id = (d.get("info_dict") or {}).get("id")
+            if video_id:
+                ydl_logger.current_id = video_id
             if d["status"] == "downloading":
                 filename = d.get("filename", "")
                 pct = d.get("_percent_str", "?%")
@@ -244,27 +286,26 @@ class VideoDownloader:
             result.failed.append((url, "No info returned"))
             return result
 
-        # Process results
-        entries = info.get("entries", [info]) if "entries" in info else [info]
-        for entry in entries:
+        # yt-dlp writes a video to the archive only after every stream was
+        # downloaded and merged/converted, so the archive is the source of truth.
+        # (yt-dlp also returns entries whose download failed halfway.)
+        archive_now = _read_archive(archive_path)
+        for entry in _iter_videos(info):
             if entry is None:
                 result.failed.append(("Unknown", "Entry was None (possibly unavailable)"))
                 continue
 
             video_id = entry.get("id", "unknown")
-            title = entry.get("title", "unknown")
+            title = entry.get("title") or video_id
             archive_id = f"youtube {video_id}"
 
             if archive_id in existing_archive:
                 result.skipped.append(title)
-            elif entry.get("requested_downloads") or entry.get("filepath"):
+            elif archive_id in archive_now:
                 result.succeeded.append(title)
             else:
-                # Check if it was an error
-                if ydl_logger.errors:
-                    result.failed.append((title, ydl_logger.errors[-1]))
-                else:
-                    result.succeeded.append(title)
+                reason = ydl_logger.errors_by_id.get(video_id) or "incomplete download (not all streams finished)"
+                result.failed.append((title, reason))
 
         logger.info(
             f"Download complete: {len(result.succeeded)} succeeded, "

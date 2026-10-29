@@ -21,6 +21,7 @@ Video downloads are capped at 1080p (or lower if source is lower), merged with a
 	- `Audio/<PlaylistName>/...`
 	- `Audio/Misc/...` for individual audio URLs
 - Keeps per-folder archives so reruns only fetch missing/new content
+- Repairs itself: broken or incomplete files from earlier runs are re-downloaded on the next run
 - Writes `download_report.txt` with success/failure/skipped details
 
 ## Installation
@@ -149,6 +150,34 @@ audio_codec = "aac"
 preset = "medium"
 ```
 
+## Broken Downloads and Interruptions
+
+You can stop a download or a transcode at any time (Ctrl-C, closing the terminal,
+shutting down). Run the same command again later and it carries on.
+
+Every `download`/`update` run checks the folder first and repairs it:
+
+- Files without a picture or sound, half-merged pieces such as `Title [id].f251.mp4`
+  (only the audio stream) and unreadable files are moved to `_broken/` and downloaded again.
+- A file in `_broken/` is deleted only once the new copy has been checked with
+  `ffprobe` and has both picture and sound. If the re-download fails, it stays there.
+- Leftover pieces of downloads that have since finished are removed the same way.
+- If a large part of a folder looks broken, or the disk is read-only, nothing is changed:
+  that usually means a disk problem, not broken videos.
+
+To see what the next run would repair, without changing anything:
+
+```bash
+./scripts/check_library.sh                                   # every folder
+./scripts/check_library.sh "/path/to/Videos/<Channel> - Videos"
+ytdl check                                                   # same, via the CLI
+```
+
+Then re-run the download or update for the listed channels/playlists.
+
+The download report only lists a video as succeeded when all its streams arrived and
+were merged, and each run's log is kept in `{base_dir}/logs/ytdl-YYYY-MM-DD.log`.
+
 ## Output Structure
 
 Generated folders:
@@ -156,6 +185,7 @@ Generated folders:
 ```text
 Videos/
 Audio/
+logs/
 ```
 
 Each channel/playlist/misc folder contains:
@@ -163,7 +193,8 @@ Each channel/playlist/misc folder contains:
 - `archive.txt` (download history)
 - `download_report.txt`
 
-Video folders may temporarily contain `_raw/` while transcoding is running.
+Video folders may temporarily contain `_raw/` while downloading/transcoding, and any
+folder may contain `_broken/` while a broken file waits for its replacement.
 
 ## License
 

@@ -192,3 +192,40 @@ class TestUpdate:
         mock_transcode.assert_called_once()
         mock_save.assert_called_once()
         assert len(result.skipped) > 0
+
+
+class TestUpdateRepairs:
+    @patch("ytdl.updater.save_report")
+    @patch("ytdl.updater.batch_transcode", return_value=(1, 0))
+    @patch("ytdl.updater.VideoDownloader")
+    @patch("ytdl.updater.extract_metadata")
+    def test_broken_file_is_downloaded_again(
+        self, mock_extract, mock_dl_class, mock_transcode, mock_save, config
+    ):
+        """Everything is archived, but one file is broken: update must fetch it again."""
+        from ytdl.media import MediaCheck
+        from ytdl.utils import ContentType, SourceType, get_output_dir
+
+        good, broken = "aaaaaaaaaaa", "bbbbbbbbbbb"
+        mock_extract.return_value = MediaMetadata(
+            url_type=URLType.CHANNEL, title="Test Channel", source_id="UC123",
+            video_count=2, video_ids=[good, broken], video_titles=["Good", "Broken"],
+        )
+        output_dir = get_output_dir(
+            config.base_dir, ContentType.VIDEO, SourceType.CHANNEL, "Test Channel"
+        )
+        (output_dir / "archive.txt").write_text(f"youtube {good}\nyoutube {broken}\n")
+        (output_dir / f"Good [{good}].mp4").touch()
+        (output_dir / f"Broken [{broken}].f251.mp4").touch()  # audio-only leftover
+        mock_dl_class.return_value.download_batch.return_value = DownloadResult(succeeded=["Broken"])
+
+        def fake_check_many(paths, require_video, workers=8):
+            return {p: MediaCheck(True) for p in paths}
+
+        with patch("ytdl.repair.check_many", side_effect=fake_check_many), \
+             patch("ytdl.repair.ffprobe_available", return_value=True):
+            update("https://www.youtube.com/@TestChannel", DownloadMode.VIDEO, config)
+
+        mock_dl_class.return_value.download_batch.assert_called_once()
+        assert (output_dir / "archive.txt").read_text() == f"youtube {good}\n"
+        assert (output_dir / "_broken" / f"Broken [{broken}].f251.mp4").exists()

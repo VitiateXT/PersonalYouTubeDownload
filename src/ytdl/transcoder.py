@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 
 from ytdl.config import Config
+from ytdl.media import VIDEO_EXTENSIONS, check_media, is_intermediate
+from ytdl.utils import BROKEN_DIR_NAME, set_aside
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +143,12 @@ def transcode_video(
             logger.error(f"Transcode failed for {input_path.name}: {proc.stderr[-500:]}")
             _remove_if_exists(temp_path)
             return False
+        # Only a verified result may take the final name.
+        check = check_media(temp_path, require_video=True)
+        if check.ok is False:
+            logger.error(f"Transcode output for {input_path.name} is unusable: {check.reason}")
+            _remove_if_exists(temp_path)
+            return False
         temp_path.replace(output_path)
         logger.info(f"Transcode complete: {output_path.name}")
         return True
@@ -182,12 +190,17 @@ def batch_transcode(output_dir: Path, config: Config) -> tuple[int, int]:
         logger.info(f"Removing stale partial transcode: {stale.name}")
         _remove_if_exists(stale)
 
-    # Find all video files in _raw/
-    video_extensions = {".mp4", ".mkv", ".webm", ".avi", ".mov"}
-    raw_files = sorted(
+    # Only finished, merged downloads. Single-stream pieces (`name.f251.webm`),
+    # `.part` files and `.temp.` merger output belong to downloads that failed or
+    # were interrupted; yt-dlp resumes them on the next run.
+    candidates = [
         f for f in raw_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in video_extensions
-    )
+        if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS
+    ]
+    raw_files = sorted(f for f in candidates if not is_intermediate(f))
+    unfinished = len(candidates) - len(raw_files)
+    if unfinished:
+        logger.info(f"Leaving {unfinished} unfinished download piece(s) in {raw_dir} for the next run")
 
     if not raw_files:
         logger.info(f"No video files found in {raw_dir}")
@@ -207,12 +220,22 @@ def batch_transcode(output_dir: Path, config: Config) -> tuple[int, int]:
 
         # If a fully transcoded output already exists (prior run was killed
         # after the rename but before the raw was removed), just drop the raw.
+        # A broken output is set aside and replaced from the raw instead.
         if output_file.exists():
-            logger.info(
-                f"  Output {output_file.name} already exists; removing orphan raw."
-            )
-            _remove_if_exists(raw_file)
-            succeeded += 1
+            if check_media(output_file, require_video=True).ok is not False:
+                logger.info(
+                    f"  Output {output_file.name} already exists; removing orphan raw."
+                )
+                _remove_if_exists(raw_file)
+                succeeded += 1
+                continue
+            logger.warning(f"  Existing {output_file.name} is broken; setting it aside")
+            set_aside(output_file, output_dir / BROKEN_DIR_NAME)
+
+        source = check_media(raw_file, require_video=True)
+        if source.ok is False:
+            logger.warning(f"  Skipping {raw_file.name}: {source.reason}; it will be re-downloaded")
+            failed += 1
             continue
 
         if transcode_video(raw_file, output_file, config):

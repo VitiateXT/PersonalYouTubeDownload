@@ -142,3 +142,88 @@ class TestVideoDownloader:
         assert opts["retries"] == config.retries
         assert opts["fragment_retries"] == config.fragment_retries
         assert opts["ignoreerrors"] is True
+
+
+class TestHonestResults:
+    """A video only counts as downloaded once yt-dlp archived it (all streams merged)."""
+
+    @staticmethod
+    def _ydl(mock_ydl_class, info, archive_ids):
+        def make(opts):
+            instance = MagicMock()
+            instance.__enter__ = MagicMock(return_value=instance)
+            instance.__exit__ = MagicMock(return_value=False)
+
+            def extract_info(url, download):
+                if archive_ids:
+                    with open(opts["download_archive"], "a") as fh:
+                        fh.writelines(f"youtube {i}\n" for i in archive_ids)
+                return info
+
+            instance.extract_info.side_effect = extract_info
+            return instance
+
+        mock_ydl_class.side_effect = make
+
+    @patch("ytdl.downloader.YoutubeDL")
+    def test_unarchived_entry_is_failed(self, mock_ydl_class, config, sample_playlist_info):
+        # yt-dlp returns all three entries (with requested_downloads), but the
+        # merge only succeeded for video1.
+        for entry in sample_playlist_info["entries"]:
+            entry["requested_downloads"] = [{"filepath": "x"}]
+        self._ydl(mock_ydl_class, sample_playlist_info, ["video1"])
+
+        result = VideoDownloader(config).download_batch(
+            "https://www.youtube.com/playlist?list=PLtest",
+            DownloadMode.VIDEO, SourceType.PLAYLIST, "Test Playlist",
+        )
+
+        assert result.succeeded == ["First Video"]
+        assert [title for title, _ in result.failed] == ["Second Video", "Third Video"]
+        assert "incomplete download" in result.failed[0][1]
+
+    @patch("ytdl.downloader.YoutubeDL")
+    def test_previously_archived_entry_is_skipped(self, mock_ydl_class, config, sample_playlist_info, tmp_base_dir):
+        folder = tmp_base_dir / "Videos" / "Test Playlist"
+        folder.mkdir(parents=True)
+        (folder / "archive.txt").write_text("youtube video1\n")
+        self._ydl(mock_ydl_class, sample_playlist_info, ["video2", "video3"])
+
+        result = VideoDownloader(config).download_batch(
+            "https://www.youtube.com/playlist?list=PLtest",
+            DownloadMode.VIDEO, SourceType.PLAYLIST, "Test Playlist",
+        )
+
+        assert result.skipped == ["First Video"]
+        assert result.succeeded == ["Second Video", "Third Video"]
+        assert result.failed == []
+
+    @patch("ytdl.downloader.YoutubeDL")
+    def test_nested_channel_tabs_are_flattened(self, mock_ydl_class, config):
+        info = {"id": "UC1", "title": "Ch", "entries": [
+            {"id": "tab", "title": "Ch - Videos", "entries": [{"id": "v1", "title": "One"}]},
+            {"id": "v2", "title": "Two"},
+            None,
+        ]}
+        self._ydl(mock_ydl_class, info, ["v1", "v2"])
+
+        result = VideoDownloader(config).download_batch(
+            "https://www.youtube.com/@Ch", DownloadMode.VIDEO, SourceType.CHANNEL, "Ch",
+        )
+
+        assert result.succeeded == ["One", "Two"]
+        assert len(result.failed) == 1  # the None entry
+
+
+class TestYDLLogger:
+    def test_errors_are_attributed_to_the_current_video(self):
+        from ytdl.downloader import _YDLLogger
+
+        log = _YDLLogger()
+        log.debug("[youtube] 5ZHvnPdXXxQ: Downloading webpage")
+        log.error("ERROR: unable to download video data: HTTP Error 403: Forbidden")
+        log.debug("[youtube] bPLKa4crk8A: Downloading webpage")
+
+        assert log.errors_by_id == {
+            "5ZHvnPdXXxQ": "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+        }

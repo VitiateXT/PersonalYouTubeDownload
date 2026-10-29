@@ -6,7 +6,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ytdl.config import Config
+from ytdl.media import MediaCheck
 from ytdl.transcoder import batch_transcode, build_transcode_command, transcode_video
+
+
+@pytest.fixture(autouse=True)
+def media_ok():
+    """Treat every file as a valid video unless a test says otherwise (no real ffprobe)."""
+    with patch("ytdl.transcoder.check_media", return_value=MediaCheck(True)) as mock:
+        yield mock
 
 
 class TestBuildTranscodeCommand:
@@ -203,3 +211,86 @@ class TestBatchTranscode:
 
         assert ok == 1  # Only the .mp4
         assert mock_transcode.call_count == 1
+
+
+class TestUnfinishedAndBrokenFiles:
+    @patch("ytdl.transcoder.transcode_video", return_value=True)
+    def test_skips_stream_pieces_and_temp_files(self, mock_transcode, config, tmp_base_dir):
+        """Single-stream pieces must never become 'finished' videos (the .f251.mp4 bug)."""
+        raw_dir = tmp_base_dir / "_raw"
+        raw_dir.mkdir()
+        (raw_dir / "A [aaaaaaaaaaa].f251.webm").touch()   # audio-only piece
+        (raw_dir / "A [aaaaaaaaaaa].f137.mp4").touch()    # video-only piece
+        (raw_dir / "B [bbbbbbbbbbb].f251-1.webm").touch()
+        (raw_dir / "C [ccccccccccc].temp.mp4").touch()    # interrupted merge
+        (raw_dir / "D [ddddddddddd].f299.mp4.part").touch()
+        (raw_dir / "E [eeeeeeeeeee].mp4").touch()         # real merged download
+
+        ok, fail = batch_transcode(tmp_base_dir, config)
+
+        assert (ok, fail) == (1, 0)
+        assert mock_transcode.call_args.args[0].name == "E [eeeeeeeeeee].mp4"
+        assert (raw_dir / "A [aaaaaaaaaaa].f251.webm").exists()  # kept for yt-dlp to resume
+
+    @patch("ytdl.transcoder.transcode_video")
+    def test_broken_input_is_skipped_and_kept(self, mock_transcode, media_ok, config, tmp_base_dir):
+        raw_dir = tmp_base_dir / "_raw"
+        raw_dir.mkdir()
+        raw = raw_dir / "A [aaaaaaaaaaa].mp4"
+        raw.touch()
+        media_ok.return_value = MediaCheck(False, "no video stream (audio only)")
+
+        ok, fail = batch_transcode(tmp_base_dir, config)
+
+        assert (ok, fail) == (0, 1)
+        mock_transcode.assert_not_called()
+        assert raw.exists()
+
+    @patch("ytdl.transcoder.transcode_video", return_value=True)
+    def test_broken_existing_output_is_replaced(self, mock_transcode, media_ok, config, tmp_base_dir):
+        raw_dir = tmp_base_dir / "_raw"
+        raw_dir.mkdir()
+        (raw_dir / "A [aaaaaaaaaaa].mp4").touch()
+        broken_output = tmp_base_dir / "A [aaaaaaaaaaa].mp4"
+        broken_output.write_text("corrupt")
+        media_ok.side_effect = lambda path, require_video: (
+            MediaCheck(False, "unreadable") if path == broken_output else MediaCheck(True)
+        )
+
+        ok, fail = batch_transcode(tmp_base_dir, config)
+
+        assert ok == 1
+        mock_transcode.assert_called_once()
+        assert (tmp_base_dir / "_broken" / "A [aaaaaaaaaaa].mp4").read_text() == "corrupt"
+
+    @patch("ytdl.transcoder.transcode_video")
+    def test_valid_existing_output_drops_raw(self, mock_transcode, config, tmp_base_dir):
+        raw_dir = tmp_base_dir / "_raw"
+        raw_dir.mkdir()
+        raw = raw_dir / "A [aaaaaaaaaaa].mp4"
+        raw.touch()
+        (tmp_base_dir / "A [aaaaaaaaaaa].mp4").touch()
+
+        ok, fail = batch_transcode(tmp_base_dir, config)
+
+        assert ok == 1
+        mock_transcode.assert_not_called()
+        assert not raw.exists()
+
+    @patch("ytdl.transcoder.subprocess.run")
+    @patch("ytdl.transcoder._check_ffmpeg", return_value="/usr/bin/ffmpeg")
+    def test_unusable_ffmpeg_output_is_not_renamed(self, mock_ffmpeg, mock_run, media_ok, config, tmp_base_dir):
+        input_path = tmp_base_dir / "input.mp4"
+        output_path = tmp_base_dir / "output.mp4"
+        input_path.touch()
+
+        def fake_run(*args, **kwargs):
+            (tmp_base_dir / "output.part.mp4").touch()
+            return MagicMock(returncode=0, stderr="")
+
+        mock_run.side_effect = fake_run
+        media_ok.return_value = MediaCheck(False, "no video stream (audio only)")
+
+        assert transcode_video(input_path, output_path, config) is False
+        assert not output_path.exists()
+        assert not (tmp_base_dir / "output.part.mp4").exists()

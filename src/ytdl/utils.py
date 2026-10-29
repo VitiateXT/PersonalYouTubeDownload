@@ -6,6 +6,9 @@ import re
 from enum import Enum
 from pathlib import Path
 
+# Per-folder holding area for broken files until a verified replacement exists.
+BROKEN_DIR_NAME = "_broken"
+
 
 class ContentType(Enum):
     """Type of content being downloaded."""
@@ -108,3 +111,23 @@ def get_archive_path(output_dir: Path) -> Path:
         Path to archive.txt within that directory.
     """
     return output_dir / "archive.txt"
+
+
+def set_aside(path: Path, broken_dir: Path) -> Path:
+    """Move a file into a `_broken/` folder, never overwriting an earlier one.
+
+    Args:
+        path: File to move.
+        broken_dir: Destination folder (created if needed).
+
+    Returns:
+        The file's new path.
+    """
+    ensure_dir(broken_dir)
+    dest = broken_dir / path.name
+    n = 2
+    while dest.exists():
+        dest = broken_dir / f"{path.stem} ({n}){path.suffix}"
+        n += 1
+    path.replace(dest)
+    return dest
