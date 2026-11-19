@@ -47,3 +47,61 @@ class TestCheckCommand:
         with patch("ytdl.repair.ffprobe_available", return_value=True):
             main(["-c", str(cfg), "check"])
         assert not (config.base_dir / "logs").exists()
+
+
+class TestTranscodeCommand:
+    @staticmethod
+    def _library(config):
+        videos = config.base_dir / "Videos"
+        raw = videos / "Chan A" / "_raw"
+        raw.mkdir(parents=True)
+        (raw / "Ready [aaaaaaaaaaa].mp4").write_bytes(b"x" * 10)
+        (raw / "Half [bbbbbbbbbbb].f251.webm").touch()       # unfinished piece
+        (raw / "Half [bbbbbbbbbbb].f137.mp4.part").touch()
+        (videos / "Chan B" / "_raw").mkdir(parents=True)     # empty _raw
+        (videos / "Chan C").mkdir()                          # no _raw
+        return videos
+
+    def test_list_is_read_only(self, config, capsys):
+        from ytdl.cli import cmd_transcode
+
+        videos = self._library(config)
+        with patch("ytdl.cli.batch_transcode") as mock_transcode:
+            code = cmd_transcode(Namespace(dir=None, all=True, list=True), config)
+
+        out = capsys.readouterr().out
+        assert code == 0
+        mock_transcode.assert_not_called()
+        assert "Chan A: 1 to transcode" in out and "Ready [aaaaaaaaaaa].mp4" in out
+        assert "Half" not in out.split("Total:")[0].split("unfinished")[-1]
+        assert "Total: 1 video(s)" in out and "1 unfinished download piece(s)" in out
+        assert "Chan B" not in out and "Chan C" not in out
+        assert (videos / "Chan A" / "_raw" / "Ready [aaaaaaaaaaa].mp4").exists()
+
+    def test_all_transcodes_only_folders_with_pending_videos(self, config):
+        from ytdl.cli import cmd_transcode
+
+        self._library(config)
+        with patch("ytdl.cli.batch_transcode", return_value=(1, 0)) as mock_transcode:
+            code = cmd_transcode(Namespace(dir=None, all=True, list=False), config)
+
+        assert code == 0
+        assert [c.args[0].name for c in mock_transcode.call_args_list] == ["Chan A"]
+
+    def test_failures_give_nonzero_exit(self, config):
+        from ytdl.cli import cmd_transcode
+
+        self._library(config)
+        with patch("ytdl.cli.batch_transcode", return_value=(0, 1)):
+            assert cmd_transcode(Namespace(dir=None, all=True, list=False), config) == 1
+
+    def test_needs_dir_or_all(self, config):
+        from ytdl.cli import cmd_transcode
+
+        assert cmd_transcode(Namespace(dir=None, all=False, list=False), config) == 1
+
+    def test_list_does_not_create_log_file(self, config, tmp_path):
+        cfg = tmp_path / "config.toml"
+        cfg.write_text(f'[general]\nbase_dir = "{config.base_dir}"\n')
+        main(["-c", str(cfg), "transcode", "--all", "--list"])
+        assert not (config.base_dir / "logs").exists()

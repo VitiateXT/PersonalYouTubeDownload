@@ -13,7 +13,7 @@ from ytdl.downloader import DownloadMode, VideoDownloader
 from ytdl.oxford import download_series, is_oxford_url
 from ytdl.repair import inspect_folder, repair_after_download, repair_before_download
 from ytdl.tracker import format_report, generate_report, save_report
-from ytdl.transcoder import batch_transcode
+from ytdl.transcoder import batch_transcode, pending_raw_files
 from ytdl.updater import update
 from ytdl.utils import ContentType, SourceType, get_output_dir
 from ytdl.validator import URLType, detect_url_type, extract_metadata, validate_url
@@ -234,14 +234,30 @@ def cmd_transcode(args: argparse.Namespace, config: Config) -> int:
     Returns:
         Process exit code.
     """
-    target_dir = Path(args.dir).resolve()
-
-    if not target_dir.exists():
-        logger.error(f"Directory not found: {target_dir}")
+    if args.all:
+        videos_dir = config.base_dir / ContentType.VIDEO.value
+        folders = sorted(d for d in videos_dir.iterdir() if d.is_dir()) if videos_dir.is_dir() else []
+    elif args.dir:
+        target_dir = Path(args.dir).expanduser().resolve()
+        if not target_dir.exists():
+            logger.error(f"Directory not found: {target_dir}")
+            return 1
+        folders = [target_dir]
+    else:
+        logger.error("Pass --dir <folder> or --all.")
         return 1
 
-    logger.info(f"Transcoding files in: {target_dir}")
-    t_ok, t_fail = batch_transcode(target_dir, config)
+    if args.list:
+        return _list_pending(folders)
+
+    t_ok = t_fail = 0
+    for folder in folders:
+        if not pending_raw_files(folder)[0]:
+            continue
+        logger.info(f"Transcoding files in: {folder}")
+        ok, fail = batch_transcode(folder, config)
+        t_ok += ok
+        t_fail += fail
 
     if t_ok == 0 and t_fail == 0:
         logger.info("No files to transcode.")
@@ -249,6 +265,36 @@ def cmd_transcode(args: argparse.Namespace, config: Config) -> int:
         logger.info(f"Transcode complete: {t_ok} succeeded, {t_fail} failed")
 
     return 1 if t_fail > 0 else 0
+
+
+def _list_pending(folders: list[Path]) -> int:
+    """Print the downloads waiting for transcoding (read-only).
+
+    Args:
+        folders: Channel/playlist folders to look at.
+
+    Returns:
+        Always 0.
+    """
+    total_files = total_bytes = total_unfinished = 0
+    for folder in folders:
+        ready, unfinished = pending_raw_files(folder)
+        if not ready and not unfinished:
+            continue
+        size = sum(f.stat().st_size for f in ready)
+        print(f"{folder.name}: {len(ready)} to transcode ({size / 1e9:.1f} GB)"
+              + (f", {unfinished} unfinished download piece(s)" if unfinished else ""))
+        for f in ready:
+            print(f"  {f.name}")
+        total_files += len(ready)
+        total_bytes += size
+        total_unfinished += unfinished
+
+    print(f"\nTotal: {total_files} video(s) waiting for transcoding ({total_bytes / 1e9:.1f} GB).")
+    if total_unfinished:
+        print(f"{total_unfinished} unfinished download piece(s) are not counted; "
+              "re-run the channel's download to finish them.")
+    return 0
 
 
 def _guess_mode(folder: Path) -> DownloadMode:
@@ -362,10 +408,20 @@ def build_parser() -> argparse.ArgumentParser:
     tc_parser = subparsers.add_parser(
         "transcode", help="Batch transcode files in a directory"
     )
-    tc_parser.add_argument(
+    tc_target = tc_parser.add_mutually_exclusive_group()
+    tc_target.add_argument(
         "--dir", "-d",
-        required=True,
         help="Directory containing files to transcode (must have _raw/ subdirectory)",
+    )
+    tc_target.add_argument(
+        "--all", "-a",
+        action="store_true",
+        help="Every channel/playlist folder under Videos/",
+    )
+    tc_parser.add_argument(
+        "--list", "-l",
+        action="store_true",
+        help="Only list the videos waiting for transcoding (read-only)",
     )
 
     # check subcommand
@@ -407,8 +463,8 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
     logger.debug(f"Config loaded: base_dir={config.base_dir}")
 
-    # `check` stays read-only, so it does not create a log file.
-    if args.command != "check":
+    # Read-only commands do not create a log file.
+    if args.command != "check" and not getattr(args, "list", False):
         add_file_logging(config.base_dir)
 
     commands = {

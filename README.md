@@ -127,6 +127,8 @@ ytdl download --url "https://www.youtube.com/playlist?list=<PLAYLIST_ID>" --mode
 ytdl update --url "https://www.youtube.com/@<CHANNEL_HANDLE>" --mode video
 ytdl download --url "https://podcasts.ox.ac.uk/series/<SERIES_NAME>"
 ytdl transcode --dir "Videos/Misc"
+ytdl transcode --all --list   # list videos still waiting for transcoding
+ytdl transcode --all          # transcode everything still waiting
 ```
 
 ## Configuration
@@ -148,6 +150,13 @@ codec = "libx264"
 crf = 25
 audio_codec = "aac"
 preset = "medium"
+```
+
+### Transcoding scripts
+
+```bash
+./list_pending_transcodes.sh   # list all downloaded videos still waiting for transcoding (read-only)
+./transcode_all.sh             # transcode all of them; safe to stop and re-run
 ```
 
 ## Broken Downloads and Interruptions

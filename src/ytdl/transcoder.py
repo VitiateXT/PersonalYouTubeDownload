@@ -165,6 +165,30 @@ def transcode_video(
         return False
 
 
+def pending_raw_files(output_dir: Path) -> tuple[list[Path], int]:
+    """Find the downloads in `_raw/` that are waiting to be transcoded.
+
+    Only finished, merged downloads count. Single-stream pieces (`name.f251.webm`),
+    `.part` files and `.temp.` merger output belong to downloads that failed or
+    were interrupted; yt-dlp resumes them on the next run.
+
+    Args:
+        output_dir: Channel/playlist folder (containing `_raw/`).
+
+    Returns:
+        Tuple of (files ready to transcode, number of unfinished download pieces).
+    """
+    raw_dir = output_dir / "_raw"
+    if not raw_dir.is_dir():
+        return [], 0
+    candidates = [
+        f for f in raw_dir.iterdir()
+        if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS
+    ]
+    ready = sorted(f for f in candidates if not is_intermediate(f))
+    return ready, len(candidates) - len(ready)
+
+
 def batch_transcode(output_dir: Path, config: Config) -> tuple[int, int]:
     """Transcode all video files in the _raw/ subdirectory.
 
@@ -190,15 +214,7 @@ def batch_transcode(output_dir: Path, config: Config) -> tuple[int, int]:
         logger.info(f"Removing stale partial transcode: {stale.name}")
         _remove_if_exists(stale)
 
-    # Only finished, merged downloads. Single-stream pieces (`name.f251.webm`),
-    # `.part` files and `.temp.` merger output belong to downloads that failed or
-    # were interrupted; yt-dlp resumes them on the next run.
-    candidates = [
-        f for f in raw_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS
-    ]
-    raw_files = sorted(f for f in candidates if not is_intermediate(f))
-    unfinished = len(candidates) - len(raw_files)
+    raw_files, unfinished = pending_raw_files(output_dir)
     if unfinished:
         logger.info(f"Leaving {unfinished} unfinished download piece(s) in {raw_dir} for the next run")
 
